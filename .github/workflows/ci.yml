@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck deploy.sh
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate a test SSH keypair
+        run: ssh-keygen -t ed25519 -f "$RUNNER_TEMP/id" -N "" -q
+
+      - name: Start SFTP server (atmoz/sftp)
+        run: |
+          docker run -d --name sftp -p 2222:22 \
+            -v "$RUNNER_TEMP/id.pub:/home/foo/.ssh/keys/id.pub:ro" \
+            atmoz/sftp foo:pass:::plugins
+
+      - name: Wait for SFTP to be ready & capture host key
+        run: |
+          for i in $(seq 1 30); do
+            if ssh-keyscan -p 2222 localhost > "$RUNNER_TEMP/known_hosts" 2>/dev/null \
+               && [ -s "$RUNNER_TEMP/known_hosts" ]; then
+              echo "SFTP is up."; cat "$RUNNER_TEMP/known_hosts"
+              {
+                echo 'KNOWN_HOSTS<<EOF'
+                cat "$RUNNER_TEMP/known_hosts"
+                echo 'EOF'
+              } >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "waiting for sftp ($i)..."; sleep 2
+          done
+          echo "SFTP did not become ready"; docker logs sftp; exit 1
+
+      - name: Make dummy plugin jars
+        run: |
+          mkdir -p build/libs
+          echo "fake-jar-password" > build/libs/PwPlugin-1.0.0.jar
+          echo "fake-jar-key"      > build/libs/KeyPlugin-1.0.0.jar
+
+      # --- password auth path ---
+      - name: Deploy via password
+        id: pw
+        uses: ./
+        with:
+          host: localhost
+          port: "2222"
+          username: foo
+          password: pass
+          local-path: build/libs/PwPlugin-*.jar
+          clean-pattern: PwPlugin-*.jar
+          known-hosts: ${{ env.KNOWN_HOSTS }}
+      - name: Assert password upload landed
+        run: |
+          docker exec sftp ls -l /home/foo/plugins/
+          docker exec sftp test -f /home/foo/plugins/PwPlugin-1.0.0.jar
+          echo "outputs: ${{ steps.pw.outputs.uploaded-files }} / ${{ steps.pw.outputs.bytes-transferred }} bytes"
+          test "${{ steps.pw.outputs.uploaded-files }}" = "PwPlugin-1.0.0.jar"
+
+      # --- key auth path ---
+      - name: Read private key into env
+        run: |
+          {
+            echo 'PRIV_KEY<<EOF'
+            cat "$RUNNER_TEMP/id"
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+      - name: Deploy via private key
+        id: key
+        uses: ./
+        with:
+          host: localhost
+          port: "2222"
+          username: foo
+          private-key: ${{ env.PRIV_KEY }}
+          local-path: build/libs/KeyPlugin-*.jar
+          known-hosts: ${{ env.KNOWN_HOSTS }}
+      - name: Assert key upload landed
+        run: |
+          docker exec sftp test -f /home/foo/plugins/KeyPlugin-1.0.0.jar
+
+      # --- negative: both auth methods => must fail ---
+      - name: Reject both password and key
+        id: neg
+        continue-on-error: true
+        uses: ./
+        with:
+          host: localhost
+          port: "2222"
+          username: foo
+          password: pass
+          private-key: ${{ env.PRIV_KEY }}
+          local-path: build/libs/PwPlugin-*.jar
+          known-hosts: ${{ env.KNOWN_HOSTS }}
+      - name: Assert the negative test failed
+        run: |
+          test "${{ steps.neg.outcome }}" = "failure"
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f sftp || true

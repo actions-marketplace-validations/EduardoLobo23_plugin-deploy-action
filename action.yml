@@ -1,0 +1,40 @@
+name: Deploy Minecraft Plugin (SFTP)
+description: Upload a prebuilt Minecraft plugin jar to a server's plugins/ folder over SFTP.
+branding:
+  icon: upload-cloud
+  color: green
+
+inputs:
+  host:          { description: SFTP host, required: true }
+  port:          { description: SFTP port, required: false, default: "22" }
+  username:      { description: SFTP username, required: true }
+  password:      { description: SFTP password (use OR private-key), required: false }
+  private-key:   { description: SSH private key PEM (use OR password), required: false }
+  local-path:    { description: Path/glob to the jar(s) to upload, required: true }
+  remote-path:   { description: Remote target directory, required: false, default: "plugins/" }
+  clean-pattern: { description: Remote jar glob to delete before upload, required: false }
+  known-hosts:   { description: known_hosts entry to pin the host key, required: false }
+  dry-run:       { description: Validate and connect without writing, required: false, default: "false" }
+
+outputs:
+  uploaded-files:    { description: Jars uploaded, value: "${{ steps.deploy.outputs.uploaded-files }}" }
+  remote-path:       { description: Resolved remote directory, value: "${{ steps.deploy.outputs.remote-path }}" }
+  bytes-transferred: { description: Total bytes transferred, value: "${{ steps.deploy.outputs.bytes-transferred }}" }
+
+runs:
+  using: composite
+  steps:
+    - id: deploy
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/deploy.sh"
+      env:
+        INPUT_HOST: ${{ inputs.host }}
+        INPUT_PORT: ${{ inputs.port }}
+        INPUT_USERNAME: ${{ inputs.username }}
+        INPUT_PASSWORD: ${{ inputs.password }}
+        INPUT_PRIVATE_KEY: ${{ inputs.private-key }}
+        INPUT_LOCAL_PATH: ${{ inputs.local-path }}
+        INPUT_REMOTE_PATH: ${{ inputs.remote-path }}
+        INPUT_CLEAN_PATTERN: ${{ inputs.clean-pattern }}
+        INPUT_KNOWN_HOSTS: ${{ inputs.known-hosts }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
