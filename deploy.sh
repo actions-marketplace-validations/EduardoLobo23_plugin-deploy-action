@@ -18,9 +18,7 @@ info() { echo "$*"; }
 
 cleanup() {
   # Best-effort removal of temp material (private key, known_hosts, batch file).
-  [ -n "${KEY_FILE:-}" ] && rm -f "$KEY_FILE" 2>/dev/null || true
-  [ -n "${KH_FILE:-}" ] && rm -f "$KH_FILE" 2>/dev/null || true
-  [ -n "${BATCH_FILE:-}" ] && rm -f "$BATCH_FILE" 2>/dev/null || true
+  rm -f "${KEY_FILE:-}" "${KH_FILE:-}" "${BATCH_FILE:-}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -105,7 +103,11 @@ else
     info "Installing sshpass..."
     sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
   fi
-  SFTP_CMD+=( -o "PreferredAuthentications=password,keyboard-interactive" -o "PubkeyAuthentication=no" )
+  # BatchMode=no is REQUIRED: `sftp -b` implies BatchMode=yes, which suppresses
+  # the password prompt so sshpass can never supply it (-> auth silently fails).
+  # It's placed before `-b` on the command line, so ssh's first-value-wins rule
+  # keeps BatchMode=no over the batchmode=yes that `-b` appends afterward.
+  SFTP_CMD+=( -o "PreferredAuthentications=password,keyboard-interactive" -o "PubkeyAuthentication=no" -o "BatchMode=no" )
   export SSHPASS="$PASSWORD"
   RUNNER=( sshpass -e )
 fi
